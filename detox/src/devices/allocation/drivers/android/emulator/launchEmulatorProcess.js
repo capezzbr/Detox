@@ -4,6 +4,7 @@ const _ = require('lodash');
 const { Tail } = require('tail');
 
 const unitLogger = require('../../../../../utils/logger').child({ __filename });
+const sleep = require('../../../../../utils/sleep');
 
 function launchEmulatorProcess(emulatorName, emulatorExec, emulatorLaunchCommand) {
   let childProcessOutput;
@@ -46,7 +47,25 @@ function launchEmulatorProcess(emulatorName, emulatorExec, emulatorLaunchCommand
 
   log = log.child({ child_pid: childProcessPromise.childProcess.pid });
 
-  return childProcessPromise.then(() => true).catch((err) => {
+  // On Android SDK 31 `childProcessPromise` never resolves when Emulator boots,
+  // so we have to continuosly scan for the process output until we detect that the emulator has booted.
+  const monitorOutputWithTimeout = async () => {
+    const TIMEOUT_MS = 3 * 60 * 1000; // 3 mins
+    const DELAY_MS = 1000;
+    const MAX_ITERATIONS = TIMEOUT_MS / DELAY_MS;
+
+    for (let i = 0; i < MAX_ITERATIONS; i += 1) {
+      await sleep(DELAY_MS);
+      const stdoutContent = fs.readFileSync(tempLog, 'utf8');
+      if (stdoutContent.includes('boot completed')) {
+        return;
+      }
+    }
+    throw new Error('Could not boot emulator');
+  };
+
+  return Promise.race([childProcessPromise, monitorOutputWithTimeout()])
+  .then(() => true).catch((err) => {
     detach();
 
     if (childProcessOutput.includes(`There's another emulator instance running with the current AVD`)) {
